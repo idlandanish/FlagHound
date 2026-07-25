@@ -4,6 +4,7 @@ import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from . import triage, crypto, archives, web, utils, crypto_kpa
 
+
 def print_banner():
     print(r"""
   ___ _ _   ___ _                  _ 
@@ -239,57 +240,177 @@ def process_single_target(target, verbose=False):
 def main():
     print_banner()
     parser = argparse.ArgumentParser(description="FlagHound v2.0: CTF Triage & Automation Tool")
-    parser.add_argument("targets", nargs="+", help="File paths or URLs to analyze")
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # Main scan command (default behavior)
+    scan_parser = subparsers.add_parser("scan", help="Scan files for flags (default)")
+    scan_parser.add_argument("targets", nargs="+", help="File paths or URLs to analyze")
+    
+    # Affine cipher solver command
+    affine_parser = subparsers.add_parser("affine", help="Bruteforce Affine Cipher")
+    affine_parser.add_argument("file", help="File containing hex-encoded ciphertext")
+    affine_parser.add_argument("--min-score", type=float, default=0.7, 
+                               help="Minimum English frequency score threshold (default: 0.7)")
+    
+    # Legacy positional arguments for backward compatibility
+    parser.add_argument("targets", nargs="*", help="File paths or URLs to analyze (legacy)")
     parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
     parser.add_argument("-j", "--jobs", type=int, default=1, help="Number of parallel jobs (default: 1)")
     parser.add_argument("-o", "--output", help="Output results to file")
+    
     args = parser.parse_args()
     
-    all_results = []
+    # Handle affine subcommand
+    if args.command == "affine":
+        handle_affine_command(args.file, args.min_score)
+        return
     
-    if args.jobs > 1:
-        # Parallel processing
-        print(f"[*] Using {args.jobs} parallel workers...\n")
-        with ProcessPoolExecutor(max_workers=args.jobs) as executor:
-            future_to_target = {
-                executor.submit(process_single_target, target, args.verbose): target 
-                for target in args.targets
-            }
-            for future in as_completed(future_to_target):
-                target = future_to_target[future]
-                try:
-                    result = future.result()
-                    all_results.append(result)
-                    if not args.verbose:
-                        # Minimal output mode
-                        if result['flags']:
-                            print(f"[+] {target}: Found {len(result['flags'])} flag(s)")
-                        elif result['errors']:
-                            print(f"[-] {target}: {result['errors'][0]}")
-                except Exception as e:
-                    print(f"[-] {target} generated exception: {e}")
+    # Default to scan if no subcommand but targets provided (legacy mode)
+    if args.command is None and args.targets:
+        args.command = "scan"
+    
+    if args.command == "scan" or args.command is None:
+        # Use targets from subparser if available, otherwise from legacy args
+        targets = getattr(args, 'targets', None)
+        if not targets:
+            parser.print_help()
+            print("\nError: No targets specified.")
+            sys.exit(1)
+        # Merge targets from both sources
+        if hasattr(args, 'targets') and args.targets:
+            targets = args.targets
+        all_results = []
+        
+        if args.jobs > 1:
+            # Parallel processing
+            print(f"[*] Using {args.jobs} parallel workers...\n")
+            with ProcessPoolExecutor(max_workers=args.jobs) as executor:
+                future_to_target = {
+                    executor.submit(process_single_target, target, args.verbose): target 
+                    for target in targets
+                }
+                for future in as_completed(future_to_target):
+                    target = future_to_target[future]
+                    try:
+                        result = future.result()
+                        all_results.append(result)
+                        if not args.verbose:
+                            # Minimal output mode
+                            if result['flags']:
+                                print(f"[+] {target}: Found {len(result['flags'])} flag(s)")
+                            elif result['errors']:
+                                print(f"[-] {target}: {result['errors'][0]}")
+                    except Exception as e:
+                        print(f"[-] {target} generated exception: {e}")
+        else:
+            # Sequential processing
+            for target in targets:
+                result = process_single_target(target, args.verbose)
+                all_results.append(result)
+                if not args.verbose:
+                    # Minimal output mode
+                    if result['flags']:
+                        print(f"[+] {target}: Found {len(result['flags'])} flag(s)")
+                    elif result['errors']:
+                        print(f"[-] {target}: {result['errors'][0]}")
+        
+        # Output results to file if requested
+        if args.output:
+            import json
+            with open(args.output, 'w') as f:
+                json.dump(all_results, f, indent=2, default=str)
+            print(f"\n[*] Results saved to {args.output}")
+        
+        # Summary
+        total_flags = sum(len(r['flags']) for r in all_results)
+        print(f"\n[*] Scan complete. Total flags found: {total_flags}")
     else:
-        # Sequential processing
-        for target in args.targets:
-            result = process_single_target(target, args.verbose)
-            all_results.append(result)
-            if not args.verbose:
-                # Minimal output mode
-                if result['flags']:
-                    print(f"[+] {target}: Found {len(result['flags'])} flag(s)")
-                elif result['errors']:
-                    print(f"[-] {target}: {result['errors'][0]}")
+        parser.print_help()
+
+
+def handle_affine_command(file_path: str, min_score: float) -> None:
+    """
+    Handle the affine cipher bruteforce subcommand.
     
-    # Output results to file if requested
-    if args.output:
-        import json
-        with open(args.output, 'w') as f:
-            json.dump(all_results, f, indent=2, default=str)
-        print(f"\n[*] Results saved to {args.output}")
+    Args:
+        file_path: Path to file containing hex-encoded ciphertext
+        min_score: Minimum English frequency score threshold
+    """
+    # Import here to avoid circular imports
+    from .crypto.affine import bruteforce_affine
     
-    # Summary
-    total_flags = sum(len(r['flags']) for r in all_results)
-    print(f"\n[*] Scan complete. Total flags found: {total_flags}")
+    print("[*] Affine Cipher Bruteforce Solver")
+    print(f"[*] Reading ciphertext from: {file_path}")
+    
+    # Read and parse the input file
+    try:
+        with open(file_path, 'r') as f:
+            content = f.read().strip()
+    except FileNotFoundError:
+        print(f"[-] Error: File not found: {file_path}")
+        sys.exit(1)
+    except IOError as e:
+        print(f"[-] Error reading file: {e}")
+        sys.exit(1)
+    
+    # Try to parse as hex first
+    try:
+        # Remove any whitespace and common prefixes
+        clean_content = content.replace(' ', '').replace('\n', '').replace('\r', '')
+        if clean_content.startswith('0x'):
+            clean_content = clean_content[2:]
+        
+        data = bytes.fromhex(clean_content)
+        print(f"[*] Loaded {len(data)} bytes of ciphertext (hex decoded)")
+    except ValueError:
+        # Not valid hex, try raw bytes
+        try:
+            data = content.encode('utf-8')
+            print(f"[*] Loaded {len(data)} bytes of ciphertext (raw)")
+        except Exception as e:
+            print(f"[-] Error parsing input: {e}")
+            print("    Input should be hex-encoded bytes or plain text.")
+            sys.exit(1)
+    
+    if len(data) == 0:
+        print("[-] Error: Empty ciphertext.")
+        sys.exit(1)
+    
+    print(f"[*] Bruteforcing affine cipher (a=odd 1-255, b=0-255)...")
+    print(f"[*] Minimum score threshold: {min_score}")
+    
+    # Run the bruteforce
+    results = bruteforce_affine(data, min_score=min_score)
+    
+    if not results:
+        print(f"\n[-] No valid candidates found with score >= {min_score}")
+        print("    Try lowering --min-score threshold.")
+        return
+    
+    print(f"\n[*] Found {len(results)} candidate(s). Top results:")
+    print("=" * 70)
+    
+    # Display top results (limit to 10 for readability)
+    for i, result in enumerate(results[:10], 1):
+        a = result['a']
+        b = result['b']
+        score = result['score']
+        plaintext = result['result']
+        
+        # Truncate long results for display
+        display_text = plaintext[:100] + "..." if len(plaintext) > 100 else plaintext
+        
+        print(f"\n[#{i}] Key: (a={a}, b={b}) | Score: {score:.2f}")
+        print(f"    Plaintext: {display_text}")
+    
+    # Show full plaintext for best result
+    if results:
+        best = results[0]
+        print("\n" + "=" * 70)
+        print(f"[*] Best candidate (a={best['a']}, b={best['b']}, score={best['score']:.2f}):")
+        print("-" * 70)
+        print(best['result'])
+        print("-" * 70)
 
 if __name__ == "__main__":
     main()

@@ -1,8 +1,10 @@
+README.md
 setup.py
 flaghound/__init__.py
 flaghound/archives.py
 flaghound/cli.py
-flaghound/crypto.py
+flaghound/crypto_kpa.py
+flaghound/crypto_module.py
 flaghound/setup.py
 flaghound/triage.py
 flaghound/utils.py
@@ -12,3 +14,5 @@ flaghound.egg-info/SOURCES.txt
 flaghound.egg-info/dependency_links.txt
 flaghound.egg-info/entry_points.txt
 flaghound.egg-info/top_level.txt
+flaghound/crypto/__init__.py
+flaghound/crypto/affine.py
