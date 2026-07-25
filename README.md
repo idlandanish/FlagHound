@@ -7,16 +7,16 @@
 
 ## 🏆 Key Features
 
-- ** Recursive Archive Extraction**: Automatically unzips nested `.zip`, `.tar`, `.gz`, `.bz2`, `.xz` up to **10 layers deep**. Includes safe guards against zip-bombs.
-- ** XOR Brute-Force Engine**: Auto-detects and cracks single-byte and short multi-byte XOR keys using frequency analysis and flag pattern heuristics (`flag{`, `CTF{`, etc.).
-- ** Smart Triage**:
+-  Recursive Archive Extraction**: Automatically unzips nested `.zip`, `.tar`, `.gz`, `.bz2`, `.xz` up to **10 layers deep**. Includes safe guards against zip-bombs.
+-  XOR Brute-Force Engine**: Auto-detects and cracks single-byte and short multi-byte XOR keys using frequency analysis and flag pattern heuristics (`flag{`, `CTF{`, etc.).
+-  Smart Triage**:
   - Extracts binary strings from ELF/Mach-O/PE files.
   - Entropy analysis to detect encrypted/compressed regions.
   - Memory mapping (`mmap`) for handling GB-sized files without RAM exhaustion.
-- ** Parallel Processing**: Scans directories using all CPU cores via `ProcessPoolExecutor`.
-- ** Web Support**: Directly analyze URLs (`http/https`) without manual download.
-- ** Auto-Decoding**: Recursively decodes Base64, Hex, Rot13, and URL encoding until plaintext emerges.
-- ** Robustness**: Global error recovery (skips corrupt files), verbose logging, and safe path handling.
+-  Parallel Processing**: Scans directories using all CPU cores via `ProcessPoolExecutor`.
+-  Web Support**: Directly analyze URLs (`http/https`) without manual download.
+-  Auto-Decoding**: Recursively decodes Base64, Hex, Rot13, and URL encoding until plaintext emerges.
+-  Robustness**: Global error recovery (skips corrupt files), verbose logging, and safe path handling.
 
 ##  Installation
 
