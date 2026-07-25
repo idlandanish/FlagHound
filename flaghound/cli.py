@@ -2,7 +2,7 @@ import argparse
 import sys
 import os
 from concurrent.futures import ProcessPoolExecutor, as_completed
-from . import triage, crypto, archives, web, utils
+from . import triage, crypto, archives, web, utils, crypto_kpa
 
 def print_banner():
     print(r"""
@@ -41,6 +41,31 @@ def process_single_target(target, verbose=False):
     temp_dir = None
     
     try:
+        # Check if target is a directory - if so, skip triage and go straight to KPA
+        if os.path.isdir(target):
+            if verbose:
+                print(f"[*] Directory detected: {target}")
+                print(f"[*] Skipping file triage, running Known Plaintext Attack scan...")
+            
+            # Phase 6: Known Plaintext Attack (KPA) for directory scans
+            kpa_results = crypto_kpa.scan_directory_for_kpa(target)
+            if kpa_results:
+                for kpa in kpa_results:
+                    results['flags'].extend(kpa['flags'])
+                    if verbose:
+                        print(f"    🚩 KPA SUCCESS! Flags found using {kpa['method']}:")
+                        for flag in kpa['flags']:
+                            print(f"       -> {flag}")
+                        print(f"       Source: {kpa['source']}")
+                        print(f"       Ciphertext files: {kpa['file']}")
+            
+            if not results['flags'] and verbose:
+                print("    -> No flags found via KPA.")
+            
+            # Deduplicate flags
+            results['flags'] = list(set(results['flags']))
+            return results
+        
         # Check if target is URL
         if target.startswith(('http://', 'https://')):
             if verbose:
@@ -166,6 +191,28 @@ def process_single_target(target, verbose=False):
                             print(f"    🚩 FLAGS FOUND via XOR key {repr(key)}:")
                             for flag in xor_flags:
                                 print(f"       -> {flag}")
+        
+        # Phase 6: Known Plaintext Attack (KPA) for directory scans
+        # Only run if scanning a directory and no flags found yet
+        target_dir = None
+        if os.path.isdir(target):
+            target_dir = target
+        elif temp_dir and os.path.exists(temp_dir):
+            target_dir = temp_dir
+            
+        if target_dir and not results['flags']:
+            if verbose:
+                print(f"\n[*] Phase 6: Known Plaintext Attack (KPA) Scan in {target_dir}...")
+            kpa_results = crypto_kpa.scan_directory_for_kpa(target_dir)
+            if kpa_results:
+                for kpa in kpa_results:
+                    results['flags'].extend(kpa['flags'])
+                    if verbose:
+                        print(f"    🚩 KPA SUCCESS! Flags found using {kpa['method']}:")
+                        for flag in kpa['flags']:
+                            print(f"       -> {flag}")
+                        print(f"       Source: {kpa['source']}")
+                        print(f"       Ciphertext files: {kpa['file']}")
         
         # Final summary
         if verbose and not results['flags']:
