@@ -151,6 +151,22 @@ def process_single_target(target, verbose=False):
                             for flag in xor_flags:
                                 print(f"       -> {flag}")
         
+        # Phase 5: Fallback XOR for text files with no flags found
+        if not results['flags'] and len(analysis['raw_data']) < 10000:
+            if verbose:
+                print("\n[*] Phase 5: Fallback XOR Brute-Force (Text File Mode)...")
+            xor_results = crypto.xor_bruteforce(analysis['raw_data'])
+            if xor_results:
+                results['decodes'].update(xor_results)
+                for key, decoded in xor_results.items():
+                    xor_flags = scan_for_flags(decoded, verbose=False)
+                    if xor_flags:
+                        results['flags'].extend(xor_flags)
+                        if verbose:
+                            print(f"    🚩 FLAGS FOUND via XOR key {repr(key)}:")
+                            for flag in xor_flags:
+                                print(f"       -> {flag}")
+        
         # Final summary
         if verbose and not results['flags']:
             print("\n    -> No flags found in initial scan.")
