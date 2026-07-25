@@ -60,6 +60,45 @@ def score_english(text):
     if not text:
         return 0
     
+    # Penalize very short texts
+    if len(text) < 3:
+        return 0
+    
+    # Penalize texts with too many repeated characters
+    char_counts = Counter(text.lower())
+    if len(char_counts) < 5:  # Need at least 5 unique characters for meaningful scoring
+        return 0
+    
+    # Check for excessive repetition (like "eeeeeee")
+    total_chars = sum(count for count in char_counts.values())
+    if total_chars > 0:
+        most_common_count = max(char_counts.values()) if char_counts else 0
+        # If any single character makes up more than 40% of the text, penalize heavily
+        if most_common_count / len(text) > 0.4:
+            return 0
+    
+    # Additional check: ensure reasonable distribution of letters
+    # English text typically has many different characters
+    alpha_counts = Counter(c for c in text.lower() if c.isalpha())
+    if len(alpha_counts) < 10:  # Need at least 10 different letters for English-like text
+        return 0
+    
+    # Reject texts with non-ASCII letters (ä, é, etc.) - these are not valid English
+    english_letters = set('abcdefghijklmnopqrstuvwxyz')
+    for char in alpha_counts.keys():
+        if char not in english_letters:
+            return 0
+    
+    # Require high percentage of alphabetic characters (English text is mostly letters)
+    total_alpha = sum(alpha_counts.values())
+    if total_alpha / len(text) < 0.7:  # At least 70% should be letters
+        return 0
+    
+    # Require high percentage of printable characters
+    printable_count = sum(1 for c in text if c.isprintable())
+    if printable_count / len(text) < 0.85:  # At least 85% should be printable
+        return 0
+    
     text_lower = text.lower()
     return _cached_score_english(text_lower)
 
