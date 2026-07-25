@@ -1,12 +1,14 @@
 """
 Crypto Module for FlagHound v2.0
 Includes Base64 recursive decoding, URL decode, Rot13, and XOR brute-force engine.
+Optimized with Hamming Distance key estimation and early exit on flag patterns.
 """
 import base64
 import binascii
 import string
 import urllib.parse
 from collections import Counter
+from typing import Dict, List, Tuple, Optional
 
 # English letter frequency for scoring
 ENGLISH_FREQ = {
@@ -18,7 +20,11 @@ ENGLISH_FREQ = {
 }
 
 # Common flag patterns for heuristic scoring
-FLAG_PATTERNS = [b'flag{', b'FLAG{', b'ctf{', b'CTF{', b'picoCTF{', b'HTB{']
+FLAG_PATTERNS = [b'flag{', b'FLAG{', b'ctf{', b'CTF{', b'picoCTF{', b'HTB{', b'google{', b'actf{']
+
+# Pre-compiled regex for faster flag detection
+import re
+FLAG_REGEX = re.compile(rb'(?:flag|ctf|picoctf|htb|google|actf)\{[a-zA-Z0-9_\-]+\}', re.IGNORECASE)
 
 def is_printable_text(data):
     """Check if data is mostly printable ASCII."""
@@ -134,10 +140,57 @@ def auto_decode(data_str):
     
     return results
 
+def hamming_distance(b1: bytes, b2: bytes) -> int:
+    """Calculate Hamming distance between two byte strings."""
+    if len(b1) != len(b2):
+        return abs(len(b1) - len(b2))
+    
+    distance = 0
+    for x, y in zip(b1, b2):
+        z = x ^ y
+        while z:
+            distance += z & 1
+            z >>= 1
+    return distance
+
+def estimate_xor_key_length(data: bytes, min_len: int = 2, max_len: int = 32) -> List[Tuple[int, float]]:
+    """
+    Estimate XOR key length using normalized Hamming distance.
+    Returns list of (key_length, avg_distance) sorted by distance (lower is better).
+    """
+    if len(data) < max_len * 2:
+        return []
+    
+    distances = []
+    
+    for key_len in range(min_len, min(max_len + 1, len(data) // 2)):
+        # Take multiple blocks and compute average Hamming distance
+        num_blocks = min(10, len(data) // key_len)
+        if num_blocks < 2:
+            continue
+        
+        total_distance = 0
+        comparisons = 0
+        
+        for i in range(num_blocks - 1):
+            block1 = data[i * key_len:(i + 1) * key_len]
+            block2 = data[(i + 1) * key_len:(i + 2) * key_len]
+            total_distance += hamming_distance(block1, block2)
+            comparisons += 1
+        
+        if comparisons > 0:
+            avg_distance = total_distance / comparisons
+            normalized = avg_distance / key_len  # Normalize by key length
+            distances.append((key_len, normalized))
+    
+    # Sort by normalized distance (lower suggests correct key length)
+    distances.sort(key=lambda x: x[1])
+    return distances[:5]  # Return top 5 candidates
+
 def xor_bruteforce(data, max_key_len=4):
     """
     Brute-force XOR encryption with single-byte and short multi-byte keys.
-    Uses frequency analysis and flag pattern heuristics.
+    Uses frequency analysis, Hamming Distance key estimation, and flag pattern heuristics.
     Returns dict of (key) -> decoded_string for best candidates.
     """
     if not data or len(data) < 10:
@@ -145,6 +198,19 @@ def xor_bruteforce(data, max_key_len=4):
     
     results = {}
     best_scores = []  # List of (score, key, decoded_text)
+    
+    # Early exit: check if data already contains a flag
+    if FLAG_REGEX.search(data):
+        match = FLAG_REGEX.search(data).group()
+        try:
+            results[b'\x00'] = match.decode('utf-8', errors='ignore')
+            return results  # Already contains flag, no need to decrypt
+        except:
+            pass
+    
+    # Estimate likely key lengths using Hamming distance
+    estimated_lengths = estimate_xor_key_length(data, min_len=2, max_len=min(max_key_len, 16))
+    priority_lengths = [length for length, _ in estimated_lengths]
     
     # Single-byte XOR (most common in CTFs)
     for key in range(256):
@@ -156,24 +222,57 @@ def xor_bruteforce(data, max_key_len=4):
         
         text = decoded.decode('utf-8', errors='ignore')
         
+        # Check for flag pattern first (fast path)
+        if FLAG_REGEX.search(decoded.lower()):
+            best_scores.insert(0, (1000, bytes([key]), text))  # High score for flag
+            continue
+        
         # Score based on English frequency
         score = score_english(text)
         
         # Bonus for flag patterns
         for pattern in FLAG_PATTERNS:
-            if pattern in decoded.lower() if isinstance(pattern, bytes) else pattern in text.lower():
+            if pattern in decoded.lower():
                 score += 50
         
         if score > 2.0:  # Threshold for "looks like English"
             best_scores.append((score, bytes([key]), text))
     
-    # Multi-byte XOR (2-4 bytes)
-    for key_len in range(2, min(max_key_len + 1, len(data) // 2)):
-        # Try common short keys
+    # Multi-byte XOR with priority on estimated key lengths
+    all_key_lengths = list(range(2, min(max_key_len + 1, len(data) // 2)))
+    # Reorder: try estimated lengths first
+    ordered_lengths = priority_lengths + [l for l in all_key_lengths if l not in priority_lengths]
+    
+    for key_len in ordered_lengths:
+        # Try common short keys first (very common in CTFs)
         common_keys = [
-            b'key', b'the', b'and', b'xor', b'flag', b'CTF',
-            b'\x00\x01', b'\xff\xff', b'AB', b'12',
+            b'key', b'the', b'and', b'xor', b'flag', b'CTF', b'ctf',
+            b'KEY', b'THE', b'AND', b'XOR', b'FLAG',
+            b'abc', b'xyz', b'123', b'password', b'secret',
+            b'admin', b'root', b'user', b'pass', b'test',
         ]
+        
+        # Test common keys directly
+        for key in common_keys:
+            if len(key) == key_len:
+                decoded = xor_decrypt(data, key)
+                
+                # Early exit on flag detection
+                if FLAG_REGEX.search(decoded.lower()):
+                    text = decoded.decode('utf-8', errors='ignore')
+                    best_scores.insert(0, (1000, key, text))
+                    continue
+                
+                if is_printable_text(decoded):
+                    text = decoded.decode('utf-8', errors='ignore')
+                    score = score_english(text)
+                    
+                    for pattern in FLAG_PATTERNS:
+                        if pattern in decoded.lower():
+                            score += 50
+                    
+                    if score > 2.0:
+                        best_scores.append((score, key, text))
         
         # Also try frequency analysis to guess key
         # For each position in key, find most likely byte
@@ -198,6 +297,12 @@ def xor_bruteforce(data, max_key_len=4):
         if guessed_key:
             key = bytes(guessed_key)
             decoded = xor_decrypt(data, key)
+            
+            # Early exit on flag detection
+            if FLAG_REGEX.search(decoded.lower()):
+                text = decoded.decode('utf-8', errors='ignore')
+                best_scores.insert(0, (1000, key, text))
+                continue
             
             if is_printable_text(decoded):
                 text = decoded.decode('utf-8', errors='ignore')

@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: flaghound
+Version: 1.0.0
+Summary: An advanced CTF Triage and Quick-Strike automation tool.
+Author: 0XIdl4n
+Requires-Python: >=3.8
+Dynamic: author
+Dynamic: requires-python
+Dynamic: summary
