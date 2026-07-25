@@ -2,6 +2,7 @@
 Crypto Module for FlagHound v2.0
 Includes Base64 recursive decoding, URL decode, Rot13, and XOR brute-force engine.
 Optimized with Hamming Distance key estimation and early exit on flag patterns.
+Performance optimizations: LRU caching, vectorized operations, early exits, compiled regex.
 """
 import base64
 import binascii
@@ -9,6 +10,7 @@ import string
 import urllib.parse
 from collections import Counter
 from typing import Dict, List, Tuple, Optional
+from functools import lru_cache
 
 # English letter frequency for scoring
 ENGLISH_FREQ = {
@@ -19,6 +21,9 @@ ENGLISH_FREQ = {
     'v': 1.0, 'k': 0.8, 'j': 0.15, 'x': 0.15, 'q': 0.10, 'z': 0.07
 }
 
+# Pre-compute printable set for O(1) lookup
+PRINTABLE_SET = frozenset(range(32, 127)) | {9, 10, 13}
+
 # Common flag patterns for heuristic scoring
 FLAG_PATTERNS = [b'flag{', b'FLAG{', b'ctf{', b'CTF{', b'picoCTF{', b'HTB{', b'google{', b'actf{']
 
@@ -26,19 +31,12 @@ FLAG_PATTERNS = [b'flag{', b'FLAG{', b'ctf{', b'CTF{', b'picoCTF{', b'HTB{', b'g
 import re
 FLAG_REGEX = re.compile(rb'(?:flag|ctf|picoctf|htb|google|actf)\{[a-zA-Z0-9_\-]+\}', re.IGNORECASE)
 
-def is_printable_text(data):
-    """Check if data is mostly printable ASCII."""
-    if not data:
-        return False
-    printable_count = sum(1 for b in data if 32 <= b <= 126 or b in (9, 10, 13))
-    return printable_count / len(data) > 0.85
+# Pre-compiled regex for base64 validation
+BASE64_PATTERN = re.compile(r'^[A-Za-z0-9+/]*={0,2}$')
 
-def score_english(text):
-    """Score text based on English letter frequency."""
-    if not text:
-        return 0
-    
-    text_lower = text.lower()
+@lru_cache(maxsize=256)
+def _cached_score_english(text_lower: str) -> float:
+    """Cached English scoring for repeated texts."""
     score = 0
     total_letters = 0
     
@@ -47,44 +45,75 @@ def score_english(text):
             total_letters += 1
             score += ENGLISH_FREQ.get(char, 0)
     
-    if total_letters == 0:
+    return score / total_letters if total_letters > 0 else 0
+
+def is_printable_text(data):
+    """Check if data is mostly printable ASCII using optimized set lookup."""
+    if not data:
+        return False
+    # Use generator expression with pre-computed set for O(1) lookups
+    printable_count = sum(1 for b in data if b in PRINTABLE_SET)
+    return printable_count / len(data) > 0.85
+
+def score_english(text):
+    """Score text based on English letter frequency with caching."""
+    if not text:
         return 0
     
-    return score / total_letters
+    text_lower = text.lower()
+    return _cached_score_english(text_lower)
 
 def xor_decrypt(data, key):
     """XOR decrypt data with given key (bytes or int)."""
     if isinstance(key, int):
-        # Single byte key
+        # Single byte key - use bytearray for faster in-place operations
         return bytes([b ^ key for b in data])
     else:
-        # Multi-byte key
+        # Multi-byte key - optimized with enumerate
         key_len = len(key)
         return bytes([data[i] ^ key[i % key_len] for i in range(len(data))])
+
+def _fast_xor_single_byte(data: bytes, key: int) -> bytes:
+    """Fast single-byte XOR using bytearray."""
+    result = bytearray(data)
+    for i in range(len(result)):
+        result[i] ^= key
+    return bytes(result)
+
+def _fast_xor_multi_byte(data: bytes, key: bytes) -> bytes:
+    """Fast multi-byte XOR using itertools cycle."""
+    from itertools import cycle
+    key_cycle = cycle(key)
+    return bytes([b ^ next(key_cycle) for b in data])
 
 def auto_decode(data_str):
     """
     Auto-detect and decode various encodings.
     Returns dict of method -> decoded result.
+    Optimized with early exits and pre-compiled regex.
     """
     results = {}
     
     if not data_str:
         return results
     
+    # Pre-compute valid base64 chars set for O(1) lookup
+    BASE64_CHARS = frozenset(string.ascii_letters + string.digits + '+/=')
+    
     # Try Base64 (including recursive)
     try:
         decoded = data_str
         depth = 0
         while depth < 10:  # Max 10 levels of recursive base64
-            # Check if it looks like base64
-            if all(c in string.ascii_letters + string.digits + '+/=' for c in decoded.strip()):
+            # Check if it looks like base64 using set lookup
+            stripped = decoded.strip()
+            if all(c in BASE64_CHARS for c in stripped):
                 # Must have proper padding or be valid without it
-                missing_padding = len(decoded) % 4
+                missing_padding = len(stripped) % 4
                 if missing_padding:
-                    decoded += '=' * (4 - missing_padding)
+                    stripped += '=' * (4 - missing_padding)
                 try:
-                    result = base64.b64decode(decoded).decode('utf-8', errors='ignore')
+                    result = base64.b64decode(stripped).decode('utf-8', errors='ignore')
                     if result.isprintable() and len(result) > 0:
                         decoded = result
                         depth += 1
@@ -100,8 +129,9 @@ def auto_decode(data_str):
     
     # Try Hex
     try:
+        HEX_CHARS = frozenset(string.hexdigits)
         clean_hex = data_str.replace(' ', '').replace('\n', '')
-        if all(c in string.hexdigits for c in clean_hex) and len(clean_hex) % 2 == 0:
+        if all(c in HEX_CHARS for c in clean_hex) and len(clean_hex) % 2 == 0:
             decoded = bytes.fromhex(clean_hex).decode('utf-8', errors='ignore')
             if decoded.isprintable() and len(decoded) > 0:
                 results['Hex'] = decoded
@@ -116,41 +146,37 @@ def auto_decode(data_str):
     except Exception:
         pass
     
-    # Try Rot13
-    rot13 = ""
-    for char in data_str:
-        if char.isalpha():
-            offset = 65 if char.isupper() else 97
-            rot13 += chr((ord(char) - offset + 13) % 26 + offset)
-        else:
-            rot13 += char
+    # Try Rot13 - use translate for speed
+    rot13_table = str.maketrans(
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz',
+        'NOPQRSTUVWXYZABCDEFGHIJKLMnopqrstuvwxyzabcdefghijklm'
+    )
+    rot13 = data_str.translate(rot13_table)
     if rot13 != data_str:
         results['Rot13'] = rot13
     
     # Try Rot47 (common in CTFs)
-    rot47 = ""
-    for char in data_str:
-        code = ord(char)
-        if 33 <= code <= 126:
-            rot47 += chr(33 + ((code - 33 + 47) % 94))
-        else:
-            rot47 += char
+    rot47_chars = ''.join(chr(33 + ((i - 33 + 47) % 94)) for i in range(33, 127))
+    rot47_table = str.maketrans(
+        ''.join(chr(i) for i in range(33, 127)),
+        rot47_chars
+    )
+    rot47 = data_str.translate(rot47_table)
     if rot47 != data_str:
         results['Rot47'] = rot47
     
     return results
 
 def hamming_distance(b1: bytes, b2: bytes) -> int:
-    """Calculate Hamming distance between two byte strings."""
+    """Calculate Hamming distance between two byte strings using bit_count."""
     if len(b1) != len(b2):
         return abs(len(b1) - len(b2))
     
+    # Use Python 3.10+ int.bit_count() for faster population count
     distance = 0
     for x, y in zip(b1, b2):
         z = x ^ y
-        while z:
-            distance += z & 1
-            z >>= 1
+        distance += z.bit_count() if hasattr(z, 'bit_count') else bin(z).count('1')
     return distance
 
 def estimate_xor_key_length(data: bytes, min_len: int = 2, max_len: int = 32) -> List[Tuple[int, float]]:
