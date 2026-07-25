@@ -1,0 +1,3 @@
+# requirements.txt
+# (We kept it standard library only for the MVP, but add these if you expand)
+requests==2.31.0
