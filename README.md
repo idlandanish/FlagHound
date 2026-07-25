@@ -22,7 +22,7 @@
 
 ### From Source
 ```bash
-git clone https://github.com/yourusername/flaghound.git
+git clone https://github.com/idlandanish/flaghound.git
 cd flaghound
 pip install -e .
 ```
