@@ -4,7 +4,7 @@ Fast triage tool for automating file analysis, nested archive extraction, and ob
 """
 
 from .triage import analyze_file, quick_scan, calculate_entropy, extract_strings
-from .crypto import auto_decode, xor_bruteforce, xor_decrypt, detect_xor_encrypted
+from .crypto_module import auto_decode, xor_bruteforce, xor_decrypt, detect_xor_encrypted
 from .archives import recursive_extract, detect_archive_type, extract_all_archives
 from .web import fetch_url, is_url
 from .utils import extract_flags
