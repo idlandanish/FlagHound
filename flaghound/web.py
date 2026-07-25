@@ -85,7 +85,9 @@ def fetch_url(url, timeout=DEFAULT_TIMEOUT):
         
         if 'filename' not in result:
             # Use last part of URL path
-            path = Path(url).path
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            path = parsed.path
             result['filename'] = Path(path).name if path else 'downloaded_file'
         
     except urllib.error.HTTPError as e:
