@@ -131,8 +131,8 @@ def process_single_target(target, verbose=False):
                             for flag in method_flags:
                                 print(f"       -> {flag}")
         
-        # Phase 4: XOR Brute-Force (if high entropy suggests encryption)
-        if analysis['entropy'] > 6.0 and len(analysis['raw_data']) < 10000:
+        # Phase 4: XOR Brute-Force (run on small files that aren't clearly plaintext)
+        if len(analysis['raw_data']) < 10000 and analysis['printable_ratio'] < 0.95:
             if verbose:
                 print("\n[*] Phase 4: XOR Brute-Force Analysis...")
             xor_results = crypto.xor_bruteforce(analysis['raw_data'])
