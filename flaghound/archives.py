@@ -10,12 +10,16 @@ import bz2
 import lzma
 import tempfile
 import shutil
+import signal
 from pathlib import Path
+from typing import Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 # Safety limits to prevent zip-bombs
 MAX_EXTRACTED_SIZE = 100 * 1024 * 1024  # 100 MB total extracted size
 MAX_FILE_COUNT = 1000  # Maximum number of files to extract
 MAX_DEPTH = 10  # Maximum recursion depth
+EXTRACTION_TIMEOUT = 30  # Seconds timeout per archive extraction
 
 SUPPORTED_ARCHIVES = {
     '.zip': 'zip',
@@ -67,78 +71,102 @@ def detect_archive_type(file_path):
     return None
 
 def safe_extract_zip(archive_path, extract_dir):
-    """Safely extract ZIP file with size limits."""
+    """Safely extract ZIP file with size limits and timeout protection."""
     extracted_files = []
     total_size = 0
     
-    try:
-        with zipfile.ZipFile(archive_path, 'r') as zf:
-            for info in zf.infolist():
-                if len(extracted_files) >= MAX_FILE_COUNT:
-                    break
-                
-                # Skip directories
-                if info.is_dir():
-                    continue
-                
-                # Check for zip-slip vulnerability
-                target_path = os.path.normpath(os.path.join(extract_dir, info.filename))
-                if not target_path.startswith(extract_dir):
-                    continue
-                
-                # Check uncompressed size limit
-                if info.file_size > MAX_EXTRACTED_SIZE:
-                    continue
-                
-                total_size += info.file_size
-                if total_size > MAX_EXTRACTED_SIZE:
-                    break
-                
-                try:
-                    zf.extract(info, extract_dir)
-                    extracted_files.append(target_path)
-                except Exception:
-                    continue
-    except Exception:
-        pass
+    def _extract():
+        nonlocal extracted_files, total_size
+        try:
+            with zipfile.ZipFile(archive_path, 'r') as zf:
+                for info in zf.infolist():
+                    if len(extracted_files) >= MAX_FILE_COUNT:
+                        break
+                    
+                    # Skip directories
+                    if info.is_dir():
+                        continue
+                    
+                    # Check for zip-slip vulnerability
+                    target_path = os.path.normpath(os.path.join(extract_dir, info.filename))
+                    if not target_path.startswith(extract_dir):
+                        continue
+                    
+                    # Check uncompressed size limit
+                    if info.file_size > MAX_EXTRACTED_SIZE:
+                        continue
+                    
+                    total_size += info.file_size
+                    if total_size > MAX_EXTRACTED_SIZE:
+                        break
+                    
+                    try:
+                        zf.extract(info, extract_dir)
+                        extracted_files.append(target_path)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    
+    # Execute with timeout
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_extract)
+        try:
+            future.result(timeout=EXTRACTION_TIMEOUT)
+        except FuturesTimeoutError:
+            extracted_files = []  # Timeout, return empty
+        except Exception:
+            pass
     
     return extracted_files
 
 def safe_extract_tar(archive_path, extract_dir, mode='r:*'):
-    """Safely extract TAR file with size limits."""
+    """Safely extract TAR file with size limits and timeout protection."""
     extracted_files = []
     total_size = 0
     
-    try:
-        with tarfile.open(archive_path, mode) as tf:
-            for member in tf.getmembers():
-                if len(extracted_files) >= MAX_FILE_COUNT:
-                    break
-                
-                # Skip directories
-                if not member.isfile():
-                    continue
-                
-                # Check size limit
-                if member.size > MAX_EXTRACTED_SIZE:
-                    continue
-                
-                total_size += member.size
-                if total_size > MAX_EXTRACTED_SIZE:
-                    break
-                
-                # Check for zip-slip
-                target_path = os.path.normpath(os.path.join(extract_dir, member.name))
-                if not target_path.startswith(extract_dir):
-                    continue
-                
-                try:
-                    tf.extract(member, extract_dir)
-                    extracted_files.append(target_path)
-                except Exception:
-                    continue
-    except Exception:
-        pass
+    def _extract():
+        nonlocal extracted_files, total_size
+        try:
+            with tarfile.open(archive_path, mode) as tf:
+                for member in tf.getmembers():
+                    if len(extracted_files) >= MAX_FILE_COUNT:
+                        break
+                    
+                    # Skip directories
+                    if not member.isfile():
+                        continue
+                    
+                    # Check size limit
+                    if member.size > MAX_EXTRACTED_SIZE:
+                        continue
+                    
+                    total_size += member.size
+                    if total_size > MAX_EXTRACTED_SIZE:
+                        break
+                    
+                    # Check for zip-slip
+                    target_path = os.path.normpath(os.path.join(extract_dir, member.name))
+                    if not target_path.startswith(extract_dir):
+                        continue
+                    
+                    try:
+                        tf.extract(member, extract_dir)
+                        extracted_files.append(target_path)
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+    
+    # Execute with timeout
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(_extract)
+        try:
+            future.result(timeout=EXTRACTION_TIMEOUT)
+        except FuturesTimeoutError:
+            extracted_files = []
+        except Exception:
+            pass
     
     return extracted_files
 
