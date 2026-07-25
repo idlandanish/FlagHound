@@ -1,0 +1,2 @@
+# FlagHound v2.0 Dependencies
+chardet>=4.0.0
