@@ -4,40 +4,27 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.Python
-env/
-venv/
-.venv/
-.ENV
-.ENV.local
+
+# Logs and temp files
+*.log
+*.tmp
+
+# Environment
 .env
 .env.local
-.env.*
-
-# Build artifacts
-build/
-dist/
-*.egg-info/
+*.env.*
 
 # Editors
 .vscode/
 .idea/
-*.swp
-*.swo
 
-# Logs
-*.log
+# Dependencies
+.venv/
+venv/
+node_modules/
 
-# Coverage
-.coverage
-coverage/
-htmlcov/
-
-# Temporary files
-*.tmp
-*.temp
-
-# OS
-.DS_Store
-Thumbs.db
+# Build artifacts
+dist/
+build/
+target/
 ```
